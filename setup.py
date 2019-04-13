@@ -12,7 +12,7 @@ setup(
     install_requires=[
         'attrs==18.1.0',
         'backoff==1.3.2',
-        'python-dateutil==2.7.3',
+        'python-dateutil>=2.7.3',
         'requests==2.20.0',
         'singer-python==5.0.15',
     ],

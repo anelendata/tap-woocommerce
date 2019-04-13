@@ -1,6 +1,9 @@
 {
     "type": "object",
     "properties": {
+        "_etl_tstamp": {
+            "type": ["null", "number"]
+        },
         "order_id": {
             "type": ["null", "number"]
         },

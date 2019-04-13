@@ -36,7 +36,7 @@ def get_endpoint(endpoint, kwargs):
     '''Get the full url for the endpoint'''
     if endpoint not in ENDPOINTS:
         raise ValueError("Invalid endpoint {}".format(endpoint))
-    
+
     after = urllib.parse.quote(kwargs[0])
     page = kwargs[1]
     return CONFIG["url"]+ENDPOINTS[endpoint].format(after,page)
@@ -122,7 +122,8 @@ def giveup(exc):
 @utils.ratelimit(20, 1)
 def gen_request(stream_id, url):
     with metrics.http_request_timer(stream_id) as timer:
-        resp = requests.get(url, auth=HTTPBasicAuth(CONFIG["consumer_key"], CONFIG["consumer_secret"]))
+        headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 ' }
+        resp = requests.get(url, headers=headers, auth=HTTPBasicAuth(CONFIG["consumer_key"], CONFIG["consumer_secret"]))
         timer.tags[metrics.Tag.http_status_code] = resp.status_code
         resp.raise_for_status()
         return resp.json()
@@ -144,6 +145,8 @@ def sync_orders(STATE, catalog):
             for order in orders:
                 counter.increment()
                 order = filter_order(order)
+                if "_etl_tstamp" in schema["properties"].keys():
+                    order["_etl_tstamp"] = time.time()
                 if("date_created" in order) and (parser.parse(order["date_created"]) > parser.parse(last_update)):
                     last_update = order["date_created"]
                 singer.write_record("orders", order)
@@ -151,7 +154,7 @@ def sync_orders(STATE, catalog):
                 break
             else:
                 page_number +=1
-    STATE = singer.write_bookmark(STATE, 'orders', 'last_update', last_update) 
+    STATE = singer.write_bookmark(STATE, 'orders', 'last_update', last_update)
     singer.write_state(STATE)
     LOGGER.info("Completed Orders Sync")
     return STATE
