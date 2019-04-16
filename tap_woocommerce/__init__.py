@@ -18,18 +18,21 @@ import dateutil
 from dateutil import parser
 
 
-REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date"]
+REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date", "schema"]
 LOGGER = singer.get_logger()
 
 CONFIG = {
     "url": None,
     "consumer_key": None,
     "consumer_secret": None,
-    "start_date":None
+    "start_date":None,
+    "schema": None,
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v2/orders?after={0}&orderby=date&order=asc&per_page=100&page={1}"
+    "orders":"wp-json/wc/v2/orders?after={0}&orderby=date&order=asc&per_page=100&page={1}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={0}&orderby=date&order=asc&per_page=100&page={1}",
+    "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={1}",
 }
 
 def get_endpoint(endpoint, kwargs):
@@ -113,6 +116,14 @@ def filter_order(order):
     }
     return filtered
 
+
+def filter_result(row, schema):
+    if schema == "orders":
+        return filter_order(row)
+    else:
+        raise KeyError(schema + " filter not implemented")
+
+
 def giveup(exc):
     return exc.response is not None \
         and 400 <= exc.response.status_code < 500 \
@@ -129,34 +140,34 @@ def gen_request(stream_id, url):
         return resp.json()
 
 
-def sync_orders(STATE, catalog):
-    schema = load_schema("orders")
-    singer.write_schema("orders", schema, ["order_id"])
+def sync_orders(STATE, catalog, schema_name="orders", id_name="order_id"):
+    schema = load_schema(schema_name)
+    singer.write_schema(schema_name, schema, [id_name])
 
-    start = get_start(STATE, "orders", "last_update")
-    LOGGER.info("Only syncing orders updated since " + start)
+    start = get_start(STATE, schema_name, "last_update")
+    LOGGER.info("Only syncing %s updated since %s" % (schema_name, start))
     last_update = start
     page_number = 1
-    with metrics.record_counter("orders") as counter:
+    with metrics.record_counter(schema_name) as counter:
         while True:
-            endpoint = get_endpoint("orders", [start, page_number])
+            endpoint = get_endpoint(schema_name, [start, page_number])
             LOGGER.info("GET %s", endpoint)
-            orders = gen_request("orders",endpoint)
-            for order in orders:
+            rows = gen_request(schema_name,endpoint)
+            for row in rows:
                 counter.increment()
-                order = filter_order(order)
+                row = filter_result(row, schema_name)
                 if "_etl_tstamp" in schema["properties"].keys():
-                    order["_etl_tstamp"] = time.time()
-                if("date_created" in order) and (parser.parse(order["date_created"]) > parser.parse(last_update)):
-                    last_update = order["date_created"]
-                singer.write_record("orders", order)
-            if len(orders) < 100:
+                    row["_etl_tstamp"] = time.time()
+                if("date_created" in row) and (parser.parse(row["date_created"]) > parser.parse(last_update)):
+                    last_update = row["date_created"]
+                singer.write_record(schema_name, row)
+            if len(rows) < 100:
                 break
             else:
                 page_number +=1
-    STATE = singer.write_bookmark(STATE, 'orders', 'last_update', last_update)
+    STATE = singer.write_bookmark(STATE, schema_name, 'last_update', last_update)
     singer.write_state(STATE)
-    LOGGER.info("Completed Orders Sync")
+    LOGGER.info("Completed %s Sync" % schema_name)
     return STATE
 
 @attr.s
