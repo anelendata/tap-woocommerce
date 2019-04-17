@@ -45,7 +45,8 @@ def get_endpoint(endpoint, kwargs):
 
     after = urllib.parse.quote(kwargs[0])
     page = kwargs[1]
-    return CONFIG["url"]+ENDPOINTS[endpoint].format(after,page)
+    return CONFIG["url"] + ENDPOINTS[endpoint].format(after,page)
+
 
 def get_start(STATE, tap_stream_id, bookmark_key):
     current_bookmark = singer.get_bookmark(STATE, tap_stream_id, bookmark_key)
@@ -53,95 +54,12 @@ def get_start(STATE, tap_stream_id, bookmark_key):
         return CONFIG["start_date"]
     return current_bookmark
 
+
 def load_schema(entity):
     '''Returns the schema for the specified source'''
     schema = utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
 
     return schema
-
-def filter_items(item):
-    filtered = {
-        "id":int(item["id"]),
-        "name":str(item["name"]),
-        "product_id":int(item["product_id"]),
-        "variation_id":int(item["variation_id"]),
-        "quantity":int(item["quantity"]),
-        "subtotal":float(item["subtotal"]),
-        "subtotal_tax":float(item["subtotal_tax"]),
-        "total":float(item["total"]),
-        "sku":str(item["sku"]),
-        "price":float(item["price"])
-    }
-    return filtered
-
-def filter_coupons(coupon):
-    filtered = {
-        "id":int(coupon["id"]),
-        "code":str(coupon["code"]),
-        "discount":float(coupon["discount"])
-    }
-    return filtered
-
-def filter_shipping(ship):
-    filtered = {
-        "id":int(ship["id"]),
-        "method_title":str(ship["method_title"]),
-        "method_id":str(ship["method_id"]),
-        "total":float(ship["total"])
-    }
-    return filtered
-
-def filter_order(order):
-    tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
-    if "line_items" in order and len(order["line_items"])>0:
-        line_items = [filter_items(item) for item in order["line_items"]]
-    else:
-        line_items = None
-    if "coupon_lines" in order and len(order["coupon_lines"])>0:
-        coupon_lines = [filter_coupons(coupon) for coupon in order["coupon_lines"]]
-    else:
-        coupon_lines = None
-    if "shippng_lines" in order and len(order["shipping_lines"])>0:
-        shipping_lines = [filter_shipping(ship) for ship in order["shipping_lines"]]
-    else:
-        shipping_lines = None
-
-    filtered = {
-        "order_id":int(order["id"]),
-        "order_key":str(order["order_key"]),
-        "status":str(order["status"]),
-        "date_created":parser.parse(order["date_created"]).replace(tzinfo=tzinfo).isoformat(),
-        "date_modified":parser.parse(order["date_modified"]).replace(tzinfo=tzinfo).isoformat(),
-        "discount_total":float(order["discount_total"]),
-        "shipping_total":float(order["shipping_total"]),
-        "total":float(order["total"]),
-        "line_items":line_items
-    }
-    return filtered
-
-
-def _do_filter_org(obj):
-    if not obj:
-        return None
-    if type(obj) is dict and obj.keys():
-        filtered = dict()
-        for key in obj.keys():
-            ret = _do_filter_org(obj[key])
-            if ret:
-                filtered[key] = ret
-    elif type(obj) is list:
-        filtered = list()
-        for o in obj:
-            ret = _do_filter_org(o)
-            if ret:
-                filtered.append(ret)
-    else:
-        try:
-            filtered = float(obj)
-        except:
-            filtered = obj
-
-    return filtered
 
 
 def nested_get(input_dict, nested_key):
@@ -191,7 +109,6 @@ def _do_filter(obj, dict_path, schema):
 
 
 def filter_result(row, schema):
-    # filtered = _do_filter_org(row)
     filtered = _do_filter(row, [], schema)
     tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
     filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
@@ -199,13 +116,6 @@ def filter_result(row, schema):
     filtered.pop("meta_data")
     filtered.pop("_links")
     return filtered
-
-
-def filter_result_old(row, schema):
-    if schema == "orders":
-        return filter_order(row)
-    else:
-        raise KeyError(schema + " filter not implemented")
 
 
 def giveup(exc):
@@ -279,6 +189,7 @@ STREAMS = {"orders": [Stream("orders", sync_orders)],
            "subscriptions": [Stream("subscriptions", sync_subscriptions)],
            "customers": [Stream("customers", sync_customers)]}
 
+
 def get_streams_to_sync(streams, state):
     '''Get the streams to sync'''
     current_stream = singer.get_currently_syncing(state)
@@ -304,6 +215,7 @@ def get_selected_streams(remaining_streams, annotated_schema):
 
     return selected_streams
 
+
 def do_sync(STATE, catalogs, schema="orders"):
     '''Sync the streams that were selected'''
     remaining_streams = get_streams_to_sync(STREAMS[schema], STATE)
@@ -326,9 +238,11 @@ def do_sync(STATE, catalogs, schema="orders"):
             LOGGER.critical(e)
             raise e
 
+
 def get_abs_path(path):
     '''Returns the absolute path'''
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
+
 
 def load_discovered_schema(stream):
     '''Attach inclusion automatic to each schema'''
@@ -336,6 +250,7 @@ def load_discovered_schema(stream):
     for k in schema['properties']:
         schema['properties'][k]['inclusion'] = 'automatic'
     return schema
+
 
 def discover_schemas(schema="orders"):
     '''Iterate through streams, push to an array and return'''
