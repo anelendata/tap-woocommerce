@@ -35,6 +35,9 @@ ENDPOINTS = {
     "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={1}",
 }
 
+USER_AGENT = 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 '
+
+
 def get_endpoint(endpoint, kwargs):
     '''Get the full url for the endpoint'''
     if endpoint not in ENDPOINTS:
@@ -117,7 +120,88 @@ def filter_order(order):
     return filtered
 
 
+def _do_filter_org(obj):
+    if not obj:
+        return None
+    if type(obj) is dict and obj.keys():
+        filtered = dict()
+        for key in obj.keys():
+            ret = _do_filter_org(obj[key])
+            if ret:
+                filtered[key] = ret
+    elif type(obj) is list:
+        filtered = list()
+        for o in obj:
+            ret = _do_filter_org(o)
+            if ret:
+                filtered.append(ret)
+    else:
+        try:
+            filtered = float(obj)
+        except:
+            filtered = obj
+
+    return filtered
+
+
+def nested_get(input_dict, nested_key):
+    internal_dict_value = input_dict
+    for k in nested_key:
+        internal_dict_value = internal_dict_value.get(k, None)
+        if internal_dict_value is None:
+            return None
+    return internal_dict_value
+
+
+def _do_filter(obj, dict_path, schema):
+    if not obj:
+        return None
+    obj_format = nested_get(schema, dict_path + ["type"])
+    if type(obj_format) is list:
+        obj_type = obj_format[1]
+    elif type(obj_format is str):
+        obj_type = obj_format
+
+    if obj_type == "object":
+        assert(type(obj) is dict and obj.keys())
+        filtered = dict()
+        for key in obj.keys():
+            ret = _do_filter(obj[key], dict_path + ["properties", key], schema)
+            if ret:
+                filtered[key] = ret
+    elif obj_type == "array":
+        assert(type(obj) is list)
+        filtered = list()
+        for o in obj:
+            ret = _do_filter(o, dict_path + ["items"], schema)
+            if ret:
+                filtered.append(ret)
+    else:
+        if obj_type == "string":
+            filtered = str(obj)
+        elif obj_type == "number":
+            try:
+                filtered = float(obj)
+            except ValueError as e:
+                LOGGER.error(str(e) + "dict_path" + str(dict_path) + " object type: " + obj_type)
+                raise
+        else:
+            filtered = obj
+    return filtered
+
+
 def filter_result(row, schema):
+    # filtered = _do_filter_org(row)
+    filtered = _do_filter(row, [], schema)
+    tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
+    filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
+    filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
+    filtered.pop("meta_data")
+    filtered.pop("_links")
+    return filtered
+
+
+def filter_result_old(row, schema):
     if schema == "orders":
         return filter_order(row)
     else:
@@ -129,20 +213,23 @@ def giveup(exc):
         and 400 <= exc.response.status_code < 500 \
         and exc.response.status_code != 429
 
+
 @utils.backoff((backoff.expo,requests.exceptions.RequestException), giveup)
 @utils.ratelimit(20, 1)
 def gen_request(stream_id, url):
     with metrics.http_request_timer(stream_id) as timer:
-        headers = { 'User-Agent': 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 ' }
-        resp = requests.get(url, headers=headers, auth=HTTPBasicAuth(CONFIG["consumer_key"], CONFIG["consumer_secret"]))
+        headers = { 'User-Agent': USER_AGENT }
+        resp = requests.get(url,
+                headers=headers,
+                auth=HTTPBasicAuth(CONFIG["consumer_key"], CONFIG["consumer_secret"]))
         timer.tags[metrics.Tag.http_status_code] = resp.status_code
         resp.raise_for_status()
         return resp.json()
 
 
-def sync_orders(STATE, catalog, schema_name="orders", id_name="order_id"):
+def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
     schema = load_schema(schema_name)
-    singer.write_schema(schema_name, schema, [id_name])
+    singer.write_schema(schema_name, schema, key_properties)
 
     start = get_start(STATE, schema_name, "last_update")
     LOGGER.info("Only syncing %s updated since %s" % (schema_name, start))
@@ -155,7 +242,7 @@ def sync_orders(STATE, catalog, schema_name="orders", id_name="order_id"):
             rows = gen_request(schema_name,endpoint)
             for row in rows:
                 counter.increment()
-                row = filter_result(row, schema_name)
+                row = filter_result(row, schema)
                 if "_etl_tstamp" in schema["properties"].keys():
                     row["_etl_tstamp"] = time.time()
                 if("date_created" in row) and (parser.parse(row["date_created"]) > parser.parse(last_update)):
@@ -170,14 +257,27 @@ def sync_orders(STATE, catalog, schema_name="orders", id_name="order_id"):
     LOGGER.info("Completed %s Sync" % schema_name)
     return STATE
 
+
+def sync_orders(STATE, catalog):
+    sync_rows(STATE, catalog, schema_name="orders", key_properties=["id"])
+
+
+def sync_subscriptions(STATE, catalog):
+    sync_rows(STATE, catalog, schema_name="subscriptions", key_properties=["id"])
+
+
+def sync_customers(STATE, catalog):
+    sync_rows(STATE, catalog, schema_name="customers", key_properties=["id"])
+
+
 @attr.s
 class Stream(object):
     tap_stream_id = attr.ib()
     sync = attr.ib()
 
-STREAMS = [
-    Stream("orders", sync_orders)
-]
+STREAMS = {"orders": [Stream("orders", sync_orders)],
+           "subscriptions": [Stream("subscriptions", sync_subscriptions)],
+           "customers": [Stream("customers", sync_customers)]}
 
 def get_streams_to_sync(streams, state):
     '''Get the streams to sync'''
@@ -204,9 +304,9 @@ def get_selected_streams(remaining_streams, annotated_schema):
 
     return selected_streams
 
-def do_sync(STATE, catalogs):
+def do_sync(STATE, catalogs, schema="orders"):
     '''Sync the streams that were selected'''
-    remaining_streams = get_streams_to_sync(STREAMS, STATE)
+    remaining_streams = get_streams_to_sync(STREAMS[schema], STATE)
     selected_streams = get_selected_streams(remaining_streams, catalogs)
     if len(selected_streams) < 1:
         LOGGER.info("No Streams selected, please check that you have a schema selected in your catalog")
@@ -237,10 +337,10 @@ def load_discovered_schema(stream):
         schema['properties'][k]['inclusion'] = 'automatic'
     return schema
 
-def discover_schemas():
+def discover_schemas(schema="orders"):
     '''Iterate through streams, push to an array and return'''
     result = {'streams': []}
-    for stream in STREAMS:
+    for stream in STREAMS[schema]:
         LOGGER.info('Loading schema for %s', stream.tap_stream_id)
         result['streams'].append({'stream': stream.tap_stream_id,
                                   'tap_stream_id': stream.tap_stream_id,
@@ -250,7 +350,7 @@ def discover_schemas():
 def do_discover():
     '''JSON dump the schemas to stdout'''
     LOGGER.info("Loading Schemas")
-    json.dump(discover_schemas(), sys.stdout, indent=4)
+    json.dump(discover_schemas(CONFIG["schema"]), sys.stdout, indent=4)
 
 @utils.handle_top_exception(LOGGER)
 def main():
@@ -265,7 +365,7 @@ def main():
     if args.discover:
         do_discover()
     elif args.catalog:
-        do_sync(STATE, args.catalog)
+        do_sync(STATE, args.catalog, CONFIG["schema"])
     else:
         LOGGER.info("No Streams were selected")
 
