@@ -2,7 +2,7 @@
 
 from requests.auth import HTTPBasicAuth
 from dateutil import parser
-import argparse, attr, backoff, itertools, json, os, requests, sys, time, urllib
+import argparse, attr, backoff, datetime, itertools, json, os, requests, sys, time, urllib
 
 import singer
 from singer import utils
@@ -21,8 +21,8 @@ CONFIG = {
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v2/orders?after={start_date}&orderby=date&order=asc&per_page=100&page={current_page}",
-    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&orderby=date&order=asc&per_page=100&page={current_page}",
+    "orders":"wp-json/wc/v2/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
     "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={current_page}",
 }
 
@@ -140,6 +140,7 @@ def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"])
     with metrics.record_counter(schema_name) as counter:
         while True:
             params = {"start_date": urllib.parse.quote(start),
+                      "end_date": urllib.parse.quote(CONFIG["end_date"]),
                       "current_page": page_number}
             endpoint = get_endpoint(schema_name, params)
             LOGGER.info("GET %s", endpoint)
@@ -339,6 +340,8 @@ def main():
     if args.end_date:
         CONFIG["end_date"] = args.end_date
 
+    if not CONFIG.get("end_date"):
+        CONFIG["end_date"]  = datetime.datetime.utcnow().isoformat()
     STATE = {}
 
     if args.state:

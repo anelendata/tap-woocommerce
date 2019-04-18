@@ -159,7 +159,7 @@
                 "postcode": {
                     "type": [
                         "null",
-                        "number"
+                        "string"
                     ]
                 },
                 "country": {
@@ -233,7 +233,7 @@
                 "postcode": {
                     "type": [
                         "null",
-                        "number"
+                        "string"
                     ]
                 },
                 "country": {
