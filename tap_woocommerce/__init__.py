@@ -75,6 +75,8 @@ def _do_filter(obj, dict_path, schema):
     if not obj:
         return None
     obj_format = nested_get(schema, dict_path + ["type"])
+    if obj_format is None:
+        return None
     if type(obj_format) is list:
         obj_type = obj_format[1]
     elif type(obj_format is str):
@@ -113,8 +115,10 @@ def filter_result(row, schema):
     tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
     filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
     filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
-    filtered.pop("meta_data")
-    filtered.pop("_links")
+    if filtered.get("meta_data"):
+        filtered.pop("meta_data")
+    if filtered.get("_links"):
+        filtered.pop("_links")
     return filtered
 
 
