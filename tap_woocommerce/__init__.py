@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
-import itertools
-import os
-import sys
-import time
-import re
-import json
-import attr
-import urllib
-import requests
-import backoff
-from requests.auth import HTTPBasicAuth
-import singer
-import singer.metrics as metrics
-from singer import utils
-import datetime
-import dateutil
-from dateutil import parser
 
+from requests.auth import HTTPBasicAuth
+from dateutil import parser
+import argparse, attr, backoff, itertools, json, os, requests, sys, time, urllib
+
+import singer
+from singer import utils
+from singer.catalog import Catalog
+import singer.metrics as metrics
 
 REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date", "schema"]
 LOGGER = singer.get_logger()
@@ -30,9 +21,9 @@ CONFIG = {
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v2/orders?after={0}&orderby=date&order=asc&per_page=100&page={1}",
-    "subscriptions": "wp-json/wc/v1/subscriptions?after={0}&orderby=date&order=asc&per_page=100&page={1}",
-    "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={1}",
+    "orders":"wp-json/wc/v2/orders?after={start_date}&orderby=date&order=asc&per_page=100&page={current_page}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&orderby=date&order=asc&per_page=100&page={current_page}",
+    "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={current_page}",
 }
 
 USER_AGENT = 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 '
@@ -42,10 +33,7 @@ def get_endpoint(endpoint, kwargs):
     '''Get the full url for the endpoint'''
     if endpoint not in ENDPOINTS:
         raise ValueError("Invalid endpoint {}".format(endpoint))
-
-    after = urllib.parse.quote(kwargs[0])
-    page = kwargs[1]
-    return CONFIG["url"] + ENDPOINTS[endpoint].format(after,page)
+    return CONFIG["url"] + ENDPOINTS[endpoint].format(**kwargs)
 
 
 def get_start(STATE, tap_stream_id, bookmark_key):
@@ -151,7 +139,9 @@ def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"])
     page_number = 1
     with metrics.record_counter(schema_name) as counter:
         while True:
-            endpoint = get_endpoint(schema_name, [start, page_number])
+            params = {"start_date": urllib.parse.quote(start),
+                      "current_page": page_number}
+            endpoint = get_endpoint(schema_name, params)
             LOGGER.info("GET %s", endpoint)
             rows = gen_request(schema_name,endpoint)
             for row in rows:
@@ -271,12 +261,84 @@ def do_discover():
     LOGGER.info("Loading Schemas")
     json.dump(discover_schemas(CONFIG["schema"]), sys.stdout, indent=4)
 
+
+def parse_args(required_config_keys):
+    ''' This is to replace singer's default utils.parse_args()
+    https://github.com/singer-io/singer-python/blob/master/singer/utils.py
+
+    Parse standard command-line args.
+    Parses the command-line arguments mentioned in the SPEC and the
+    BEST_PRACTICES documents:
+    -c,--config     Config file
+    -s,--state      State file
+    -d,--discover   Run in discover mode
+    -p,--properties Properties file: DEPRECATED, please use --catalog instead
+    --catalog       Catalog file
+    Returns the parsed args object from argparse. For each argument that
+    point to JSON files (config, state, properties), we will automatically
+    load and parse the JSON file.
+    '''
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        '-c', '--config',
+        help='Config file',
+        required=True)
+
+    parser.add_argument(
+        '-s', '--state',
+        help='State file')
+
+    parser.add_argument(
+        '-p', '--properties',
+        help='Property selections: DEPRECATED, Please use --catalog instead')
+
+    parser.add_argument(
+        '--catalog',
+        help='Catalog file')
+
+    parser.add_argument(
+        '-d', '--discover',
+        action='store_true',
+        help='Do schema discovery')
+
+    # Capture additional args
+    parser.add_argument(
+        "--start_date", type=str, default=None,
+        help="Inclusive start date time in ISO8601-Date-String format: 2019-04-11T00:00:00Z")
+    parser.add_argument(
+        "--end_date", type=str, default=None,
+        help="Exclusive end date time in ISO8601-Date-String format: 2019-04-12T00:00:00Z")
+
+    args = parser.parse_args()
+    if args.config:
+        args.config = utils.load_json(args.config)
+    if args.state:
+        args.state = utils.load_json(args.state)
+    else:
+        args.state = {}
+    if args.properties:
+        args.properties = utils.load_json(args.properties)
+    if args.catalog:
+        args.catalog = Catalog.load(args.catalog)
+
+    utils.check_config(args.config, required_config_keys)
+
+    return args
+
+
 @utils.handle_top_exception(LOGGER)
 def main():
     '''Entry point'''
-    args = utils.parse_args(REQUIRED_CONFIG_KEYS)
-
+    args = parse_args(REQUIRED_CONFIG_KEYS)
     CONFIG.update(args.config)
+
+    # Overwrite config specs with commandline args if present
+    if args.start_date:
+        CONFIG["start_date"] = args.start_date
+    if args.end_date:
+        CONFIG["end_date"] = args.end_date
+
     STATE = {}
 
     if args.state:
