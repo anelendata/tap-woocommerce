@@ -2,7 +2,7 @@
 
 from requests.auth import HTTPBasicAuth
 from dateutil import parser
-import argparse, attr, backoff, datetime, itertools, json, os, requests, sys, time, urllib
+import argparse, attr, backoff, datetime, itertools, json, os, pytz, requests, sys, time, urllib
 
 import singer
 from singer import utils
@@ -11,6 +11,8 @@ import singer.metrics as metrics
 
 REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date", "schema"]
 LOGGER = singer.get_logger()
+
+METORIK_ITEMS_PER_PAGE = 10
 
 CONFIG = {
     "url": None,
@@ -24,6 +26,10 @@ ENDPOINTS = {
     "orders":"wp-json/wc/v2/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
     "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
     "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={current_page}",
+    "metorik": "wp-json/wc/v1/{resource}/updated?days={relative_date}&limit=100&offset={offset}",
+    "orders_by_id":"wp-json/wc/v2/orders?include={ids}",
+    "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
+    "customers_by_id":"wp-json/wc/v2/customers?include={ids}",
 }
 
 USER_AGENT = 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 '
@@ -175,6 +181,92 @@ def sync_customers(STATE, catalog):
     sync_rows(STATE, catalog, schema_name="customers", key_properties=["id"])
 
 
+@utils.backoff((backoff.expo,requests.exceptions.RequestException), giveup)
+@utils.ratelimit(20, 1)
+def gen_metorik_request(stream_id, url):
+    with metrics.http_request_timer(stream_id) as timer:
+        headers = { 'User-Agent': USER_AGENT }
+        resp = requests.get(url,
+                headers=headers,
+                auth=HTTPBasicAuth(CONFIG["username"], CONFIG["password"]))
+        timer.tags[metrics.Tag.http_status_code] = resp.status_code
+        resp.raise_for_status()
+        return resp.json()
+
+
+def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
+    schema = load_schema(schema_name)
+    singer.write_schema(schema_name, schema, key_properties)
+
+    start = get_start(STATE, schema_name, "last_update")
+    last_update = start
+    offset = 0
+
+    datediff = datetime.datetime.utcnow().replace(tzinfo=pytz.utc) - parser.parse(start)
+    id_set = set()
+
+    start_process_at = datetime.datetime.now()
+    LOGGER.info("Starting %s Sync at %s" % (schema_name, str(start_process_at)))
+    LOGGER.info("Only syncing %s updated since %s" % (schema_name, start))
+
+    while True:
+        LOGGER.info("Offset: %d" % offset)
+        # First get the list of IDs
+        params = {"resource": schema_name,
+                  "relative_date": datediff.days,
+                  "offset": offset,
+                  "items_per_page": METORIK_ITEMS_PER_PAGE}
+        endpoint = get_endpoint("metorik", params)
+        LOGGER.info("GET %s", endpoint)
+        rows = gen_metorik_request(schema_name,endpoint)
+        for row in rows[schema_name]:
+            # last_updated is an unix timestamp
+            if (CONFIG.get("end_date") is None or row["last_updated"] is None or
+                    datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc) < parser.parse(CONFIG["end_date"])):
+                    id_set.add(row["id"])
+
+        if len(rows[schema_name]) < 100:
+            LOGGER.info("End of records %d" % len(rows[schema_name]))
+            break
+        else:
+            offset = offset + 100
+
+    LOGGER.info("Found %d records" % len(id_set))
+    ids = list(id_set)
+    with metrics.record_counter(schema_name) as counter:
+        current_idx = 0
+        while current_idx < len(ids):
+            params = {"resource": schema_name,
+                      "ids": ",".join(ids[current_idx:min(len(ids), current_idx + METORIK_ITEMS_PER_PAGE)])}
+            endpoint = get_endpoint(schema_name + "_by_id", params)
+            LOGGER.info("GET %s", endpoint)
+            rows = gen_request(schema_name,endpoint)
+            for row in rows:
+                counter.increment()
+                row = filter_result(row, schema)
+                if "_etl_tstamp" in schema["properties"].keys():
+                    row["_etl_tstamp"] = time.time()
+                singer.write_record(schema_name, row)
+            current_idx = current_idx + METORIK_ITEMS_PER_PAGE
+
+    STATE = singer.write_bookmark(STATE, schema_name, 'last_update', last_update)
+    singer.write_state(STATE)
+    end_process_at = datetime.datetime.now()
+    LOGGER.info("Completed %s Sync at %s" % (schema_name, str(end_process_at)))
+    LOGGER.info("Process duration: " + str(end_process_at - start_process_at))
+
+    return STATE
+
+def sync_orders_via_metorik(STATE, catalog):
+    sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=["id"])
+
+def sync_subscriptions_via_metorik(STATE, catalog):
+    sync_rows_via_metorik(STATE, catalog, schema_name="subscriptions", key_properties=["id"])
+
+def sync_customers_via_metorik(STATE, catalog):
+    sync_rows_via_metorik(STATE, catalog, schema_name="customers", key_properties=["id"])
+
+
 @attr.s
 class Stream(object):
     tap_stream_id = attr.ib()
@@ -182,7 +274,11 @@ class Stream(object):
 
 STREAMS = {"orders": [Stream("orders", sync_orders)],
            "subscriptions": [Stream("subscriptions", sync_subscriptions)],
-           "customers": [Stream("customers", sync_customers)]}
+           "customers": [Stream("customers", sync_customers)],
+           "metorik_orders": [Stream("orders", sync_orders_via_metorik)],
+           "metorik_subscriptions": [Stream("subscriptions", sync_subscriptions_via_metorik)],
+           "metorik_customers": [Stream("customers", sync_customers_via_metorik)],
+           }
 
 
 def get_streams_to_sync(streams, state):
@@ -344,12 +440,16 @@ def main():
         CONFIG["end_date"]  = datetime.datetime.utcnow().isoformat()
     STATE = {}
 
+    schema = CONFIG["schema"]
+    if CONFIG.get("use_metorik"):
+        schema = "metorik_" + schema
+
     if args.state:
         STATE.update(args.state)
     if args.discover:
         do_discover()
     elif args.catalog:
-        do_sync(STATE, args.catalog, CONFIG["schema"])
+        do_sync(STATE, args.catalog, schema)
     else:
         LOGGER.info("No Streams were selected")
 
