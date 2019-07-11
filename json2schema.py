@@ -31,7 +31,8 @@ def _do_infer_schema(obj):
 
 def infer_schema(obj):
     if type(obj) is list:
-        raise NotImplemented("TODO: Read array of objects to run bettter inference.")
+        obj = obj[0]
+        # TODO: read multiple lines for better inference
     if type(obj) is not dict:
         raise ValueError("Input must be a dict object.")
     schema = _do_infer_schema(obj)
