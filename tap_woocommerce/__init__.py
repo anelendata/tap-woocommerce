@@ -23,13 +23,13 @@ CONFIG = {
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v2/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
+    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
     "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
-    "customers":"wp-json/wc/v2/customers?orderby=id&order=asc&per_page=100&page={current_page}",
-    "metorik": "wp-json/wc/v1/{resource}/updated?days={relative_date}&limit=100&offset={offset}",
-    "orders_by_id":"wp-json/wc/v2/orders?include={ids}",
+    "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page=100&page={current_page}",
+    "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit=100&offset={offset}",
+    "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
     "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
-    "customers_by_id":"wp-json/wc/v2/customers?include={ids}",
+    "customers_by_id":"wp-json/wc/v3/customers?role=all&include={ids}",
 }
 
 USER_AGENT = 'Mozilla/5.0 (Macintosh; scitylana.singer.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36 '
@@ -203,6 +203,7 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
     offset = 0
 
     datediff = datetime.datetime.utcnow().replace(tzinfo=pytz.utc) - parser.parse(start)
+    datediff.seconds
     id_set = set()
 
     start_process_at = datetime.datetime.now()
@@ -213,7 +214,8 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
         LOGGER.info("Offset: %d" % offset)
         # First get the list of IDs
         params = {"resource": schema_name,
-                  "relative_date": datediff.days,
+                  "days": datediff.days,
+                  "hours": datediff.seconds / 3600,
                   "offset": offset,
                   "items_per_page": METORIK_ITEMS_PER_PAGE}
         endpoint = get_endpoint("metorik", params)
@@ -241,6 +243,8 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
             endpoint = get_endpoint(schema_name + "_by_id", params)
             LOGGER.info("GET %s", endpoint)
             rows = gen_request(schema_name,endpoint)
+            if len(rows) < len(ids[current_idx:min(len(ids), current_idx + METORIK_ITEMS_PER_PAGE)]):
+                LOGGER.warning("Number of items returned from WC API is lower than the ID list size")
             for row in rows:
                 counter.increment()
                 row = filter_result(row, schema)
