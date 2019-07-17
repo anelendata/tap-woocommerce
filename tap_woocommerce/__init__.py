@@ -28,7 +28,7 @@ ENDPOINTS = {
     "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page=100&page={current_page}",
     "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit=100&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
-    "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
+    "subscriptions_by_id":"wp-json/wc/v3/subscriptions?include={ids}",
     "customers_by_id":"wp-json/wc/v3/customers?role=all&include={ids}",
 }
 
@@ -202,7 +202,11 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
     last_update = start
     offset = 0
 
-    datediff = datetime.datetime.utcnow().replace(tzinfo=pytz.utc) - parser.parse(start)
+    utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+    start_datetime = parser.parse(start)
+    if start_datetime.tzinfo is None:
+        start_datetime = start_datetime.replace(tzinfo=pytz.utc)
+    datediff = utc_now - start_datetime
     datediff.seconds
     id_set = set()
 
@@ -223,8 +227,11 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
         rows = gen_metorik_request(schema_name,endpoint)
         for row in rows[schema_name]:
             # last_updated is an unix timestamp
-            if (CONFIG.get("end_date") is None or row["last_updated"] is None or
-                    datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc) < parser.parse(CONFIG["end_date"])):
+            current_timestamp = datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc)
+            end_date = parser.parse(CONFIG["end_date"])
+            if end_date.tzinfo is None:
+                end_date = end_date.replace(tzinfo=pytz.utc)
+            if CONFIG.get("end_date") is None or row["last_updated"] is None or current_timestamp < end_date:
                     id_set.add(row["id"])
 
         if len(rows[schema_name]) < 100:
