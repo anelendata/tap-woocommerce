@@ -20,13 +20,14 @@ CONFIG = {
     "consumer_secret": None,
     "start_date":None,
     "schema": None,
+    "items_per_page": 100
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
-    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page=100&page={current_page}",
-    "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page=100&page={current_page}",
-    "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit=100&offset={offset}",
+    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page={items_per_page}&page={current_page}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page={items_per_page}&page={current_page}",
+    "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
+    "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit={items_per_page}&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
     "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
     "customers_by_id":"wp-json/wc/v3/customers?role=all&include={ids}",
@@ -109,10 +110,10 @@ def filter_result(row, schema):
     tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
     filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
     filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
-    if filtered.get("meta_data"):
-        filtered.pop("meta_data")
-    if filtered.get("_links"):
-        filtered.pop("_links")
+    # filtered.get("meta_data"):
+    #     filtered.pop("meta_data")
+    # if filtered.get("_links"):
+    #     filtered.pop("_links")
     return filtered
 
 
@@ -147,7 +148,9 @@ def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"])
         while True:
             params = {"start_date": urllib.parse.quote(start),
                       "end_date": urllib.parse.quote(CONFIG["end_date"]),
-                      "current_page": page_number}
+                      "items_per_page": CONFIG["items_per_page"],
+                      "current_page": page_number
+                      }
             endpoint = get_endpoint(schema_name, params)
             LOGGER.info("GET %s", endpoint)
             rows = gen_request(schema_name,endpoint)
@@ -159,7 +162,7 @@ def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"])
                 if("date_created" in row) and (parser.parse(row["date_created"]) > parser.parse(last_update)):
                     last_update = row["date_created"]
                 singer.write_record(schema_name, row)
-            if len(rows) < 100:
+            if len(rows) < CONFIG["items_per_page"]:
                 break
             else:
                 page_number +=1
@@ -236,11 +239,11 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
             if CONFIG.get("end_date") is None or row["last_updated"] is None or (current_timestamp and current_timestamp < end_date):
                     id_set.add(row["id"])
 
-        if len(rows[schema_name]) < 100:
+        if len(rows[schema_name]) < CONFIG["items_per_page"]:
             LOGGER.info("End of records %d" % len(rows[schema_name]))
             break
         else:
-            offset = offset + 100
+            offset = offset + CONFIG["items_per_page"]
 
     LOGGER.info("Found %d records" % len(id_set))
     ids = list(id_set)
