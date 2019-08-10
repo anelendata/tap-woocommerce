@@ -28,7 +28,7 @@ ENDPOINTS = {
     "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page=100&page={current_page}",
     "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit=100&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
-    "subscriptions_by_id":"wp-json/wc/v3/subscriptions?include={ids}",
+    "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
     "customers_by_id":"wp-json/wc/v3/customers?role=all&include={ids}",
 }
 
