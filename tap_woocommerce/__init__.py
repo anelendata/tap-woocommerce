@@ -227,11 +227,13 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
         rows = gen_metorik_request(schema_name,endpoint)
         for row in rows[schema_name]:
             # last_updated is an unix timestamp
-            current_timestamp = datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc)
+            current_timestamp = None
+            if row["last_updated"]:
+                current_timestamp = datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc)
             end_date = parser.parse(CONFIG["end_date"])
             if end_date.tzinfo is None:
                 end_date = end_date.replace(tzinfo=pytz.utc)
-            if CONFIG.get("end_date") is None or row["last_updated"] is None or current_timestamp < end_date:
+            if CONFIG.get("end_date") is None or row["last_updated"] is None or (current_timestamp and current_timestamp < end_date):
                     id_set.add(row["id"])
 
         if len(rows[schema_name]) < 100:
