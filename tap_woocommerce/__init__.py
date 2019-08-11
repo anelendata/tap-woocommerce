@@ -109,8 +109,10 @@ def _do_filter(obj, dict_path, schema):
 def filter_result(row, schema):
     filtered = _do_filter(row, [], schema)
     tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
-    filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
-    filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
+    if filtered.get("date_created"):
+        filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
+    if filtered.get("date_modified"):
+        filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
     if filtered.get("meta_data"):
         filtered.pop("meta_data")
     if filtered.get("_links"):
