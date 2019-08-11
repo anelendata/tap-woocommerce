@@ -35,6 +35,12 @@ $tap-woocommerce --config config.json --discover >> catalog.json
 ```
 - Run the above to discover the data points the tap supports for each of Woocommerce's endpoints (currently only List-Orders)
 
+If you have your own schema definition, specify the directory that stores orders.json, customers.json, subscriptions.json and etc:
+
+```
+$tap-woocommerce --config config.json --discover >> catalog.json --schemas_path /path/to
+```
+
 3. Select Streams
 
 ```
@@ -52,11 +58,23 @@ $tap-woocommerce --config config.json --discover >> catalog.json
 
 4.Run the tap
 
+By default, the items there were created between start_date and end_date are
+synced.
+
 ```
 $tap-woocommerce --config config.json --catalog catalog.json
 ```
 
-5.Run with Stitch Target
+5.Run to sync modified items only
+
+Sync only the items that were modified between start_date and end_date.
+This requires WooCommerce v1 API available.
+
+```
+$tap-woocommerce --config config.json --catalog catalog.json --modified_items_only true
+```
+
+6.Run with Stitch Target
 
 - Install target
 
@@ -78,4 +96,4 @@ tap-woocommerce --config config.json --catalog catalog.json | target-stitch --co
 ```
 ---
 
-Copyright &copy; 2018 Stitch
+Copyright &copy; 2019 Anelen Co., LLC

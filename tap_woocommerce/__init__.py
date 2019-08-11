@@ -9,10 +9,10 @@ from singer import utils
 from singer.catalog import Catalog
 import singer.metrics as metrics
 
-REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date", "schema"]
+REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date"]
 LOGGER = singer.get_logger()
 
-METORIK_ITEMS_PER_PAGE = 10
+INCREMENTAL_ITEMS_PER_PAGE = 10
 
 CONFIG = {
     "url": None,
@@ -20,14 +20,15 @@ CONFIG = {
     "consumer_secret": None,
     "start_date":None,
     "schema": None,
-    "items_per_page": 100
+    "items_per_page": 100,
+    "schemas_path": "schemas"
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=date&order=asc&per_page={items_per_page}&page={current_page}",
-    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=date&order=asc&per_page={items_per_page}&page={current_page}",
+    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
     "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
-    "metorik": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit={items_per_page}&offset={offset}",
+    "modified_items": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit={items_per_page}&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
     "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
     "customers_by_id":"wp-json/wc/v3/customers?role=all&include={ids}",
@@ -50,9 +51,9 @@ def get_start(STATE, tap_stream_id, bookmark_key):
     return current_bookmark
 
 
-def load_schema(entity):
+def load_schema(entity, schemas_path):
     '''Returns the schema for the specified source'''
-    schema = utils.load_json(get_abs_path("schemas/{}.json".format(entity)))
+    schema = utils.load_json(get_abs_path(os.path.join(schemas_path, "{}.json".format(entity))))
 
     return schema
 
@@ -110,10 +111,10 @@ def filter_result(row, schema):
     tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
     filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
     filtered["date_modified"] = parser.parse(row["date_modified"]).replace(tzinfo=tzinfo).isoformat()
-    # filtered.get("meta_data"):
-    #     filtered.pop("meta_data")
-    # if filtered.get("_links"):
-    #     filtered.pop("_links")
+    if filtered.get("meta_data"):
+        filtered.pop("meta_data")
+    if filtered.get("_links"):
+        filtered.pop("_links")
     return filtered
 
 
@@ -137,7 +138,7 @@ def gen_request(stream_id, url):
 
 
 def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
-    schema = load_schema(schema_name)
+    schema = load_schema(schema_name, CONFIG["schemas_path"])
     singer.write_schema(schema_name, schema, key_properties)
 
     start = get_start(STATE, schema_name, "last_update")
@@ -186,7 +187,7 @@ def sync_customers(STATE, catalog):
 
 @utils.backoff((backoff.expo,requests.exceptions.RequestException), giveup)
 @utils.ratelimit(20, 1)
-def gen_metorik_request(stream_id, url):
+def gen_modified_items_request(stream_id, url):
     with metrics.http_request_timer(stream_id) as timer:
         headers = { 'User-Agent': USER_AGENT }
         resp = requests.get(url,
@@ -197,8 +198,8 @@ def gen_metorik_request(stream_id, url):
         return resp.json()
 
 
-def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
-    schema = load_schema(schema_name)
+def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
+    schema = load_schema(schema_name, CONFIG["schemas_path"])
     singer.write_schema(schema_name, schema, key_properties)
 
     start = get_start(STATE, schema_name, "last_update")
@@ -224,10 +225,10 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
                   "days": datediff.days,
                   "hours": datediff.seconds / 3600,
                   "offset": offset,
-                  "items_per_page": METORIK_ITEMS_PER_PAGE}
-        endpoint = get_endpoint("metorik", params)
+                  "items_per_page": INCREMENTAL_ITEMS_PER_PAGE}
+        endpoint = get_endpoint("modified_items", params)
         LOGGER.info("GET %s", endpoint)
-        rows = gen_metorik_request(schema_name,endpoint)
+        rows = gen_modified_items_request(schema_name,endpoint)
         for row in rows[schema_name]:
             # last_updated is an unix timestamp
             current_timestamp = None
@@ -251,11 +252,11 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
         current_idx = 0
         while current_idx < len(ids):
             params = {"resource": schema_name,
-                      "ids": ",".join(ids[current_idx:min(len(ids), current_idx + METORIK_ITEMS_PER_PAGE)])}
+                      "ids": ",".join(ids[current_idx:min(len(ids), current_idx + INCREMENTAL_ITEMS_PER_PAGE)])}
             endpoint = get_endpoint(schema_name + "_by_id", params)
             LOGGER.info("GET %s", endpoint)
             rows = gen_request(schema_name,endpoint)
-            if len(rows) < len(ids[current_idx:min(len(ids), current_idx + METORIK_ITEMS_PER_PAGE)]):
+            if len(rows) < len(ids[current_idx:min(len(ids), current_idx + INCREMENTAL_ITEMS_PER_PAGE)]):
                 LOGGER.warning("Number of items returned from WC API is lower than the ID list size")
             for row in rows:
                 counter.increment()
@@ -263,7 +264,7 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
                 if "_etl_tstamp" in schema["properties"].keys():
                     row["_etl_tstamp"] = time.time()
                 singer.write_record(schema_name, row)
-            current_idx = current_idx + METORIK_ITEMS_PER_PAGE
+            current_idx = current_idx + INCREMENTAL_ITEMS_PER_PAGE
 
     STATE = singer.write_bookmark(STATE, schema_name, 'last_update', last_update)
     singer.write_state(STATE)
@@ -273,14 +274,14 @@ def sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=[
 
     return STATE
 
-def sync_orders_via_metorik(STATE, catalog):
-    sync_rows_via_metorik(STATE, catalog, schema_name="orders", key_properties=["id"])
+def sync_modified_orders(STATE, catalog):
+    sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["id"])
 
-def sync_subscriptions_via_metorik(STATE, catalog):
-    sync_rows_via_metorik(STATE, catalog, schema_name="subscriptions", key_properties=["id"])
+def sync_modified_subscriptions(STATE, catalog):
+    sync_modified_rows(STATE, catalog, schema_name="subscriptions", key_properties=["id"])
 
-def sync_customers_via_metorik(STATE, catalog):
-    sync_rows_via_metorik(STATE, catalog, schema_name="customers", key_properties=["id"])
+def sync_modified_customers(STATE, catalog):
+    sync_modified_rows(STATE, catalog, schema_name="customers", key_properties=["id"])
 
 
 @attr.s
@@ -291,9 +292,9 @@ class Stream(object):
 STREAMS = {"orders": [Stream("orders", sync_orders)],
            "subscriptions": [Stream("subscriptions", sync_subscriptions)],
            "customers": [Stream("customers", sync_customers)],
-           "metorik_orders": [Stream("orders", sync_orders_via_metorik)],
-           "metorik_subscriptions": [Stream("subscriptions", sync_subscriptions_via_metorik)],
-           "metorik_customers": [Stream("customers", sync_customers_via_metorik)],
+           "modified_orders": [Stream("orders", sync_modified_orders)],
+           "modified_subscriptions": [Stream("subscriptions", sync_modified_subscriptions)],
+           "modified_customers": [Stream("customers", sync_modified_customers)],
            }
 
 
@@ -353,7 +354,7 @@ def get_abs_path(path):
 
 def load_discovered_schema(stream):
     '''Attach inclusion automatic to each schema'''
-    schema = load_schema(stream.tap_stream_id)
+    schema = load_schema(stream.tap_stream_id, CONFIG["schemas_path"])
     for k in schema['properties']:
         schema['properties'][k]['inclusion'] = 'automatic'
     return schema
@@ -423,6 +424,14 @@ def parse_args(required_config_keys):
         "--end_date", type=str, default=None,
         help="Exclusive end date time in ISO8601-Date-String format: 2019-04-12T00:00:00Z")
 
+    parser.add_argument(
+        "--modified_items_only", type=str, default=None,
+        help="When True, use v1 API to fetch the modified items between start_date and end_date")
+
+    parser.add_argument(
+        "--schemas_path", type=str, default=None,
+        help="Path to schemas dir. Default schemas are used when not specified.")
+
     args = parser.parse_args()
     if args.config:
         args.config = utils.load_json(args.config)
@@ -452,13 +461,24 @@ def main():
     if args.end_date:
         CONFIG["end_date"] = args.end_date
 
+    if args.modified_items_only:
+        if args.modified_items_only.lower() in ["true", "yes", "t", "y"]:
+            CONFIG["modified_items_only"] = True
+        elif args.modified_items_only.lower() in ["false", "no", "f", "n"]:
+            CONFIG["modified_items_only"] = False
+        else:
+            raise ValueError("Boolean indicator expected for modified_items_only")
+
+    if args.schemas_path:
+        CONFIG["schemas_path"] = args.schemas_path
+
     if not CONFIG.get("end_date"):
         CONFIG["end_date"]  = datetime.datetime.utcnow().isoformat()
     STATE = {}
 
     schema = CONFIG["schema"]
-    if CONFIG.get("use_metorik"):
-        schema = "metorik_" + schema
+    if CONFIG.get("modified_items_only") is True:
+        schema = "modified_" + schema
 
     if args.state:
         STATE.update(args.state)
