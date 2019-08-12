@@ -227,7 +227,7 @@ def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["or
                   "days": datediff.days,
                   "hours": datediff.seconds / 3600,
                   "offset": offset,
-                  "items_per_page": INCREMENTAL_ITEMS_PER_PAGE}
+                  "items_per_page": CONFIG["items_per_page"]}
         endpoint = get_endpoint("modified_items", params)
         LOGGER.info("GET %s", endpoint)
         rows = gen_modified_items_request(schema_name,endpoint)
