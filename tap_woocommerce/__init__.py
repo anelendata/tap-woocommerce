@@ -27,7 +27,7 @@ CONFIG = {
 ENDPOINTS = {
     "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
     "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
-    "customers":"wp-json/wc/v3/customers?orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
+    "customers":"wp-json/wc/v3/customers?role=all&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
     "modified_items": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit={items_per_page}&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
     "subscriptions_by_id":"wp-json/wc/v1/subscriptions?include={ids}",
