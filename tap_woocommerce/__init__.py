@@ -21,7 +21,9 @@ CONFIG = {
     "schema": None,
     "items_per_page": 100,
     "schema_dir": "schemas",
-    "timezone_offset": "+00:00"
+    "timezone_offset": "+00:00",
+    # Creates an overlap of the time to favor data dups than missing data
+    "relative_time_safety_margin": 0
 }
 
 ENDPOINTS = {
@@ -209,13 +211,11 @@ def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["or
     last_update = start
     offset = 0
 
-    utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
-    start_attime = parser.parse(start)
-    if start_attime.tzinfo is None:
-        start_attime = start_attime.replace(tzinfo=pytz.utc)
+    start_at_time = parser.parse(start)
+    if start_at_time.tzinfo is None:
+        start_at_time = start_at_time.replace(tzinfo=pytz.utc)
 
-    tz_offset = parser.parse("1970-01-02T00:00:00+00:00").replace(tzinfo=pytz.utc) - parser.parse("1970-01-02T00:00:00" + CONFIG["timezone_offset"])
-    datediff = utc_now - start_attime + tz_offset
+    tz_offset = parser.parse("1970-01-02T00:00:00+00:00").replace(tzinfo=pytz.utc) - parser.parse("1970-01-02T00:00:00" + CONFIG["timezone_offset"]) + datetime.timedelta(seconds=CONFIG["relative_time_safety_margin"])
 
     id_set = set()
 
@@ -225,6 +225,10 @@ def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["or
     LOGGER.info("Only syncing %s updated since %s" % (schema_name, start))
 
     while True:
+        # We need to update the relative time inside the loop as the time is moving
+        utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
+        datediff = utc_now - start_at_time + tz_offset
+
         LOGGER.info("Offset: %d" % offset)
         # First get the list of IDs
         params = {"resource": schema_name,
