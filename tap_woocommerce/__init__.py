@@ -9,7 +9,7 @@ from singer import utils
 from singer.catalog import Catalog
 import singer.metrics as metrics
 
-REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret", "start_date"]
+REQUIRED_CONFIG_KEYS = ["url", "consumer_key", "consumer_secret"]
 LOGGER = singer.get_logger()
 
 INCREMENTAL_ITEMS_PER_PAGE = 10
@@ -18,15 +18,15 @@ CONFIG = {
     "url": None,
     "consumer_key": None,
     "consumer_secret": None,
-    "start_date":None,
     "schema": None,
     "items_per_page": 100,
-    "schemas_path": "schemas"
+    "schema_dir": "schemas",
+    "timezone_offset": "+00:00"
 }
 
 ENDPOINTS = {
-    "orders":"wp-json/wc/v3/orders?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
-    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_date}&before={end_date}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
+    "orders":"wp-json/wc/v3/orders?after={start_at}{timezone_offset}&before={end_at}{timezone_offset}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
+    "subscriptions": "wp-json/wc/v1/subscriptions?after={start_at}{timezone_offset}&before={end_at}{timezone_offset}&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
     "customers":"wp-json/wc/v3/customers?role=all&orderby=id&order=asc&per_page={items_per_page}&page={current_page}",
     "modified_items": "wp-json/wc/v1/{resource}/updated?days={days}&hours={hours}&limit={items_per_page}&offset={offset}",
     "orders_by_id":"wp-json/wc/v3/orders?include={ids}",
@@ -47,13 +47,13 @@ def get_endpoint(endpoint, kwargs):
 def get_start(STATE, tap_stream_id, bookmark_key):
     current_bookmark = singer.get_bookmark(STATE, tap_stream_id, bookmark_key)
     if current_bookmark is None:
-        return CONFIG["start_date"]
+        return CONFIG["start_at"]
     return current_bookmark
 
 
-def load_schema(entity, schemas_path):
+def load_schema(entity, schema_dir):
     '''Returns the schema for the specified source'''
-    schema = utils.load_json(get_abs_path(os.path.join(schemas_path, "{}.json".format(entity))))
+    schema = utils.load_json(os.path.join(schema_dir, "{}.json".format(entity)))
 
     return schema
 
@@ -108,7 +108,7 @@ def _do_filter(obj, dict_path, schema):
 
 def filter_result(row, schema):
     filtered = _do_filter(row, [], schema)
-    tzinfo = parser.parse(CONFIG["start_date"]).tzinfo
+    tzinfo = parser.parse(CONFIG["start_at"]).tzinfo
     if filtered.get("date_created"):
         filtered["date_created"] = parser.parse(row["date_created"]).replace(tzinfo=tzinfo).isoformat()
     if filtered.get("date_modified"):
@@ -140,7 +140,7 @@ def gen_request(stream_id, url):
 
 
 def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
-    schema = load_schema(schema_name, CONFIG["schemas_path"])
+    schema = load_schema(schema_name, CONFIG["schema_dir"])
     singer.write_schema(schema_name, schema, key_properties)
 
     start = get_start(STATE, schema_name, "last_update")
@@ -149,10 +149,11 @@ def sync_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"])
     page_number = 1
     with metrics.record_counter(schema_name) as counter:
         while True:
-            params = {"start_date": urllib.parse.quote(start),
-                      "end_date": urllib.parse.quote(CONFIG["end_date"]),
+            params = {"start_at": urllib.parse.quote(start),
+                      "end_at": urllib.parse.quote(CONFIG["end_at"]),
                       "items_per_page": CONFIG["items_per_page"],
-                      "current_page": page_number
+                      "current_page": page_number,
+                      "timezone_offset": urllib.parse.quote(CONFIG["timezone_offset"])
                       }
             endpoint = get_endpoint(schema_name, params)
             LOGGER.info("GET %s", endpoint)
@@ -201,7 +202,7 @@ def gen_modified_items_request(stream_id, url):
 
 
 def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["order_id"]):
-    schema = load_schema(schema_name, CONFIG["schemas_path"])
+    schema = load_schema(schema_name, CONFIG["schema_dir"])
     singer.write_schema(schema_name, schema, key_properties)
 
     start = get_start(STATE, schema_name, "last_update")
@@ -209,12 +210,15 @@ def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["or
     offset = 0
 
     utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.utc)
-    start_datetime = parser.parse(start)
-    if start_datetime.tzinfo is None:
-        start_datetime = start_datetime.replace(tzinfo=pytz.utc)
-    datediff = utc_now - start_datetime
-    datediff.seconds
+    start_attime = parser.parse(start)
+    if start_attime.tzinfo is None:
+        start_attime = start_attime.replace(tzinfo=pytz.utc)
+
+    tz_offset = parser.parse("1970-01-02T00:00:00+00:00").replace(tzinfo=pytz.utc) - parser.parse("1970-01-02T00:00:00" + CONFIG["timezone_offset"])
+    datediff = utc_now - start_attime + tz_offset
+
     id_set = set()
+
 
     start_process_at = datetime.datetime.now()
     LOGGER.info("Starting %s Sync at %s" % (schema_name, str(start_process_at)))
@@ -236,10 +240,10 @@ def sync_modified_rows(STATE, catalog, schema_name="orders", key_properties=["or
             current_timestamp = None
             if row["last_updated"]:
                 current_timestamp = datetime.datetime.utcfromtimestamp(int(row["last_updated"])).replace(tzinfo=pytz.utc)
-            end_date = parser.parse(CONFIG["end_date"])
-            if end_date.tzinfo is None:
-                end_date = end_date.replace(tzinfo=pytz.utc)
-            if CONFIG.get("end_date") is None or row["last_updated"] is None or (current_timestamp and current_timestamp < end_date):
+            end_at = parser.parse(CONFIG["end_at"])
+            if end_at.tzinfo is None:
+                end_at = end_at.replace(tzinfo=pytz.utc)
+            if CONFIG.get("end_at") is None or row["last_updated"] is None or (current_timestamp and current_timestamp < end_at):
                     id_set.add(row["id"])
 
         if len(rows[schema_name]) < CONFIG["items_per_page"]:
@@ -356,7 +360,7 @@ def get_abs_path(path):
 
 def load_discovered_schema(stream):
     '''Attach inclusion automatic to each schema'''
-    schema = load_schema(stream.tap_stream_id, CONFIG["schemas_path"])
+    schema = load_schema(stream.tap_stream_id, CONFIG["schema_dir"])
     for k in schema['properties']:
         schema['properties'][k]['inclusion'] = 'automatic'
     return schema
@@ -420,18 +424,18 @@ def parse_args(required_config_keys):
 
     # Capture additional args
     parser.add_argument(
-        "--start_date", type=str, default=None,
+        "--start_at", type=str, default=None,
         help="Inclusive start date time in ISO8601-Date-String format: 2019-04-11T00:00:00Z")
     parser.add_argument(
-        "--end_date", type=str, default=None,
+        "--end_at", type=str, default=None,
         help="Exclusive end date time in ISO8601-Date-String format: 2019-04-12T00:00:00Z")
 
     parser.add_argument(
         "--modified_items_only", type=str, default=None,
-        help="When True, use v1 API to fetch the modified items between start_date and end_date")
+        help="When True, use v1 API to fetch the modified items between start_at and end_at")
 
     parser.add_argument(
-        "--schemas_path", type=str, default=None,
+        "--schema_dir", type=str, default=None,
         help="Path to schemas dir. Default schemas are used when not specified.")
 
     args = parser.parse_args()
@@ -458,10 +462,10 @@ def main():
     CONFIG.update(args.config)
 
     # Overwrite config specs with commandline args if present
-    if args.start_date:
-        CONFIG["start_date"] = args.start_date
-    if args.end_date:
-        CONFIG["end_date"] = args.end_date
+    if args.start_at:
+        CONFIG["start_at"] = args.start_at
+    if args.end_at:
+        CONFIG["end_at"] = args.end_at
 
     if args.modified_items_only:
         if args.modified_items_only.lower() in ["true", "yes", "t", "y"]:
@@ -471,11 +475,11 @@ def main():
         else:
             raise ValueError("Boolean indicator expected for modified_items_only")
 
-    if args.schemas_path:
-        CONFIG["schemas_path"] = args.schemas_path
+    if args.schema_dir:
+        CONFIG["schema_dir"] = args.schema_dir
 
-    if not CONFIG.get("end_date"):
-        CONFIG["end_date"]  = datetime.datetime.utcnow().isoformat()
+    if not CONFIG.get("end_at"):
+        CONFIG["end_at"]  = datetime.datetime.utcnow().isoformat()
     STATE = {}
 
     schema = CONFIG["schema"]
