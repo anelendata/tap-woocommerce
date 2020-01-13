@@ -15,7 +15,7 @@
         "parent_id": {
             "type": [
                 "null",
-                "number"
+                "integer"
             ]
         },
         "number": {
@@ -133,7 +133,7 @@
         "customer_id": {
             "type": [
                 "null",
-                "number"
+                "integer"
             ]
         },
         "customer_ip_address": {
@@ -340,38 +340,6 @@
                 "string"
             ]
         },
-        "meta_data": {
-            "type": [
-                "null",
-                "array"
-            ],
-            "items": {
-                "type": [
-                    "null",
-                    "object"
-                ],
-                "properties": {
-                    "id": {
-                        "type": [
-                            "null",
-                            "number"
-                        ]
-                    },
-                    "key": {
-                        "type": [
-                            "null",
-                            "string"
-                        ]
-                    },
-                    "value": {
-                        "type": [
-                            "null",
-                            "string"
-                        ]
-                    }
-                }
-            }
-        },
         "line_items": {
             "type": [
                 "null",
@@ -386,7 +354,7 @@
                     "id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "name": {
@@ -398,13 +366,13 @@
                     "product_id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "variation_id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "quantity": {
@@ -457,7 +425,7 @@
                                 "id": {
                                     "type": [
                                         "null",
-                                        "number"
+                                        "integer"
                                     ]
                                 },
                                 "total": {
@@ -504,7 +472,7 @@
                     "id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "rate_code": {
@@ -516,7 +484,7 @@
                     "rate_id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "label": {
@@ -560,7 +528,7 @@
                     "id": {
                         "type": [
                             "null",
-                            "number"
+                            "integer"
                         ]
                     },
                     "method_title": {
@@ -586,54 +554,6 @@
                             "null",
                             "number"
                         ]
-                    }
-                }
-            }
-        },
-        "_links": {
-            "type": [
-                "null",
-                "object"
-            ],
-            "properties": {
-                "self": {
-                    "type": [
-                        "null",
-                        "array"
-                    ],
-                    "items": {
-                        "type": [
-                            "null",
-                            "object"
-                        ],
-                        "properties": {
-                            "href": {
-                                "type": [
-                                    "null",
-                                    "string"
-                                ]
-                            }
-                        }
-                    }
-                },
-                "collection": {
-                    "type": [
-                        "null",
-                        "array"
-                    ],
-                    "items": {
-                        "type": [
-                            "null",
-                            "object"
-                        ],
-                        "properties": {
-                            "href": {
-                                "type": [
-                                    "null",
-                                    "string"
-                                ]
-                            }
-                        }
                     }
                 }
             }
